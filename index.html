@@ -1,0 +1,304 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Noobes' WinInternals Docs</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+    <link href="https://fonts.googleapis.com/css?family=Nunito+Sans:300,400,600,700,800,900" rel="stylesheet">
+    <link rel="stylesheet" href="scribbler-global.css">
+    <link rel="stylesheet" href="scribbler-doc.css">
+  </head>
+  <body>
+    <div class="doc__bg"></div>
+    <nav class="header">
+      <h1 class="logo">Windows <span class="logo__thin">Internals</span><h1 class="logo">Usermode</h1></h1>
+    </nav>
+    <div class="wrapper">
+      <aside class="doc__nav">
+        <ul>
+          <li class="js-btn selected">Subsystem Dlls</li>
+          <li class="js-btn">Windows API / Win32 API</li>
+          <li class="js-btn">Volumes and Symbolic Links</li>
+        </ul>
+      </aside>
+      <article class="doc__content">
+        <section class="js-section">
+          <h3 class="section__title">Subsystem Dlls</h3>
+          <p>In Windows NT, each time an user mode application is doing a Windows API function call, the function called is actually located in a Subsystem DLL.
+            <br>Subsystem DLLs are DLLs with a lot of exported functions that build the Windows API.
+          </p>
+
+          <p>The Subsystem DLL list:</p>
+          <table id="SubSytemDllTab">
+            <tr>
+              <th>DLL</th>
+              <th>Exports</th>
+            </tr>
+            <tr>
+              <td>kernel32.dll</td>
+              <td>CreateFileA, CreateThread, Sleep, etc.</td>
+            </tr>
+            <tr>
+              <td>user32.dll</td>
+              <td>MessageBoxA, FindWindowA, etc.</td>
+            </tr>
+            <tr>
+              <td>advapi32.dll</td>
+              <td>CreateServiceA, CreateProcessAsUserA, etc.</td>
+            </tr>
+            <tr>
+              <td>gdi32.dll</td>
+              <td>BitBlt, CreatePolygonRgn, etc.</td>
+            </tr>
+          </table>
+          <p>These DLLs are located through the Known Dlls mechanism and they differ depending on application's architecture.</p>
+          <table id="KnownDllTab">
+            <tr>
+              <th>Section</th>
+              <th>Architecture</th>
+            </tr>
+            <tr>
+              <td>\KnownDlls</td>
+              <td>x64 (only for applications that support building in x64)</td>
+            </tr>
+            <tr>
+              <td>\KnownDlls32</td>
+              <td>x86</td>
+            </tr>
+          </table>
+          <p>Each section hold one type of Subsystem DLLs:
+            <br><b>KnownDlls</b> holds 64-bit varriants of Kernel32.dll, Advapi32.dll, User32.dll, and Gdi32.dll that are located in <b>\Windows\System32</b>
+            <br><b>KnownDlls32</b> holds 32-bit varriants of Kernel32.dll, Advapi32.dll, User32.dll, and Gdi32.dll that are located in <b>\Windows\SysWOW64</b>
+          </b></p>
+          <p>Using <b>LoadLibraryEx</b> WinAPI function would first check the specified path, if not found, it would check for the library in the Known Dlls section (System32 or SysWOW64 path) -> Also called A Safe Dll Search.</p>
+          <div class="code__block code__block--notabs">
+            <pre class="code code--block">
+              <code>
+                LoadLibraryEx("ntdll.dll", NULL, NULL); // Directly checks for the Known Dlls section
+              </code>
+            </pre>
+          </div>
+        </section>
+        <section class="js-section">
+          <h3 class="section__title">Windows API / Win32 API</h3>
+          <p>Windows automatically loads kernel32.dll in every new application started. This doesn't apply to the other Subsystem DLLs, unless the application imports a function from that one of them.</p>
+          <p>Windows has a pretty complexe layout when it's about Windows API. Unlike Linux, where you do direct System Calls, in Windows the function goes through multiple phases until the point where a System Call is made.</p>
+          <p>Functions exported by <b>kernel32.dll</b> get redirected to the same-named functions located in <b>kernelbase.dll</b>. And now, functions from kernelbase.dll get redirected to a different-named functions from the native <b>ntdll.dll</b> library.
+          <br>Native functions start with the <b>Nt</b> prefix, though ntdll.dll contains other functions such as the image loader (<b>Ldr</b> prefix), run time library (<b>Rtl</b> prefix), etc.</p>
+          <p>The native functions located in ntdll.dll contain the System Call stubs (the index of the function and a <b>syscall</b> instruction).</p>
+          <div class="code__block code__block--notabs">
+            <pre class="code code--block">
+              <code>
+                NtCreateFile:
+                  mov eax, 0x1337 ; Index of NtCreateFile
+                  syscall ; or sysenter
+                  ret
+              </code>
+            </pre>
+          </div>
+          <p>Once the System Call executes, we're in kernel mode theoretically but not practically. The System Call triggered the interrupt handler responsible for dispatching system services. The System Service Dispatcher would check the index of the function sent by ntdll and then call the executive function with the coresponding index from the kernel (ntoskrnl.exe). <b> The executive function from the kernel has the same name as the function from ntdll.</b></p>
+          <br>
+          <br>
+          <p>We've talked about kernel32.dll, let's talk about <b>gdi32.dll</b> and <b>user32.dll</b>.
+          <br>These get loaded whenever you import a function exposed by one of these dlls. Eg. using the BitBlt function would load gdi32.dll. If I'd use MessageBoxA function, it would load user32.dll.</b>
+          <br>The same as ntdll, the functions exported by these DLLs get redirected to other DLLs.
+          <br>A function exported from gdi32.dll would redirect to a <b>NtGdi</b>-prefixed function in win32u.dll that contains a stub (like ntdll), <b>but unlike ntdll functions, the code doesn't end in the kernel</b>, the code goes through the kernel and ends up in <b>win32k.sys</b> driver.</p>
+          <p>The exact same thing applies for functions exported by user32.dll, but the only difference is that, the functions start with the <b>NtUser</b> prefix in win32u.dll. </p>
+          <table id="WinApiTab">
+            <tr>
+              <th>kernel32.dll</th>
+              <th>kernelbase.dll</th>
+              <th>ntdll.dll</th>
+              <th>syscall in ntdll</th>
+              <th>ntoskrnl.exe</th>
+            </tr>
+            <tr>
+              <td>CreateFileA</td>
+              <td>-> CreateFileA</td>
+              <td>-> NtCreateFile</td>
+              <td>System Call stub</td>
+              <td>-> NtCreateFile</td>
+            </tr>
+            <tr>
+              <td>ReadFile</td>
+              <td>-> ReadFile</td>
+              <td>-> NtReadFile</td>
+              <td>System Call stub</td>
+              <td>-> NtReadFile</td>
+            </tr>
+            <tr>
+              <td>WriteFile</td>
+              <td>-> WriteFile</td>
+              <td>-> NtWriteFile</td>
+              <td>System Call stub</td>
+              <td>-> NtWriteFile</td>
+            </tr>
+            <tr>
+              <td>CloseHandle</td>
+              <td>-> CloseHandle</td>
+              <td>-> NtClose</td>
+              <td>System Call stub</td>
+              <td>-> NtClose</td>
+            </tr>
+          </table>
+          <table id="WinApiTab2">
+            <tr>
+              <th>gdi32.dll</th>
+              <th>gdi32full.dll (not always)</th>
+              <th>win32u.dll</th>
+              <th>syscall in win32u</th>
+              <th>ntoskrnl.exe</th>
+              <th>win32k.sys</th>
+            </tr>
+            <tr>
+              <td>BitBlt</td>
+              <td>-> BitBlt</td>
+              <td>-> NtGdiBitBlt</td>
+              <td>System Call stub</td>
+              <td>-> NtGdiBitBlt</td>
+              <td>-> NtGdiBitBlt</td>
+            </tr>
+            <tr>
+              <td>StretchBlt</td>
+              <td>-> StretchBlt</td>
+              <td>-> StretchBlt</td>
+              <td>System Call stub</td>
+              <td>-> NtGdiStretchBlt</td>
+              <td>-> NtGdiStretchBlt</td>
+            </tr>
+          </table>
+          <table id="WinApiTab3">
+            <tr>
+              <th>user32.dll</th>
+              <th>win32u.dll</th>
+              <th>syscall in win32u</th>
+              <th>ntoskrnl.exe</th>
+              <th>win32k.sys</th>
+            </tr>
+            <tr>
+              <td>CreateWindowEx</td>
+              <td>-> NtUserCreateWindowEx</td>
+              <td>System Call stub</td>
+              <td>-> NtUserCreateWindowEx</td>
+              <td>-> NtUserCreateWindowEx</td>
+            </tr>
+            <tr>
+              <td>GetDC</td>
+              <td>-> NtUserGetDC</td>
+              <td>System Call stub</td>
+              <td>-> NtUserGetDC</td>
+              <td>-> NtUserGetDC</td>
+            </tr>
+            <tr>
+              <td>FindWindowEx</td>
+              <td>-> NtUserFindWindowEx</td>
+              <td>System Call stub</td>
+              <td>-> NtUserFindWindowEx</td>
+              <td>-> NtUserFindWindowEx</td>
+            </tr>
+          </table>
+        </section>
+        <section class="js-section">
+          <h3 class="section__title">Volumes and Symbolic Links<br>(Small Kernel Mode related topic)</h3>
+          <p>Whenever we talk about Volumes we actually talk about storage units, more exactly <b>Partitions</b>.</p>
+          <p><b>Partitions</b> are portions of a disk. They get generated in the installation process of the operating system.
+            <br>On UEFI Systems, the partition table is generated at sector 2 - 32 of the Physical Disk. On the other hand, on MBR Systems the partition table is generated in the Master Boot Record (sector 0 of the Physical Disk).
+          <br></p>
+
+          <p>At startup, Windows' OS Loader checks the partition table for the primary partition. The primary partition is the partition where the Operating System is installed on. After the partition is found, the loader checks the starting sector of the actual partition. The first sector of a partition represents the Volume Boot Record that gives a lot of useful information such as the partition file system. Windows supports: NTFS, FAT and exFAT.</p>
+          <p>When Windows decides that the primary partition is healthy, the kernel gets executed followed by its dependencies (drivers, hal, etc.).</p>
+          <p>After more intitializations, Windows maps the partitions and assigns letters so that other programs can access them.</p>
+          <p>The primary partition will have the C letter assigned, followed by the next alphabetic letters.
+            <br>Windows can handle only 4 primary partitions on MBR Systems and up to 128 on UEFI Systems.
+          </p>
+
+          <p>The partition paths such as C:\, D:\, etc. are just <b>Symbolic Links</b>. It means that, whenever you access this path it will actually redirect you to a device object. (You can search what they are on google I'm lazy to document).</p>
+          <p>So let's say we are accessing the C: drive through the CreateFileA WinAPI Function.</p>
+          <div class="code__block code__block--notabs">
+            <pre class="code code--block">
+              <code>
+                HANDLE hDrive = CreateFileA("\\\\.\\C:", ...);
+              </code>
+            </pre>
+          </div>
+        </section>
+        <p>The actual path we are accessing is <b>\Device\HarddiskVolumeX</b> (X - index of the volume), because that's the device object created by Windows for the C: UNC Path.</p>
+        <p>Windows creates multiple Symbolic Links for device objects like that. For example, we can also access this one by 
+         <b>\Device\HarddiskX\PartitionY</b> (where X is the index of the harddisk plugged in and Y the index of the partition).<br>
+        </p>
+        <p>Examples:</p>
+        <table id="VolumeSymLink">
+          <tr>
+            <th>Symbolic Link</th>
+            <th>Device Object</th>
+          </tr>
+          <tr>
+            <td>C:</td>
+            <td>\Device\HarddiskVolume4</td>
+          </tr>
+          <tr>
+            <td>C:</td>
+            <td>\Device\Harddisk0\Partition2</td>
+          </tr>
+          <tr>
+            <td>D:</td>
+            <td>\Device\HarddiskVolume6</td>
+          </tr>
+        </table>
+        <p>Now, we should cover how applications read a whole disk. It works the same as opening the \\.\C: drive but we are using the <b>\\.\PhysicalDriveX</b> (where X is the index of the disk you want to access) Symbolic Link.</p>
+        <p>The same as opening the C: Path, PhysicalDriveX actually goes through <b>\Device\HarddiskX\DR(X)</b> device object (where X is the index of the disk you want to access). The <b>DR(X)</b> link gives direct access with the disk.</p>
+        <p>Examples:</p>
+        <table id="VolumeSymLink">
+          <tr>
+            <th>Symbolic Link</th>
+            <th>Device Object</th>
+          </tr>
+          <tr>
+            <td>PhysicalDrive0</td>
+            <td>\Device\Harddisk0\DR0</td>
+          </tr>
+          <tr>
+            <td>PhysicalDrive1</td>
+            <td>\Device\Harddisk1\DR1</td>
+          </tr>
+        </table>
+        <p><b>NOTE:</b> Going back to how we access C: path, whenever the Symbolic Link ends with <b>\Partition0</b>, the Symbolic Link redirects to <b>\Device\HarddiskX\DR(X)</b>.</p>
+        <table id="NoteExample">
+          <tr>
+            <th>Symbolic Link</th>
+            <th>Device Object</th>
+          </tr>
+          <tr>
+            <td>\Device\Harddisk0\Partition0</td>
+            <td>\Device\Harddisk0\DR0</td>
+          </tr>
+          <tr>
+            <td>\Device\Harddisk1\Partition0</td>
+            <td>\Device\Harddisk1\DR1</td>
+          </tr>
+        </table>
+        <p>But this rule doesn't apply there:</p>
+        <table id="NoteExample">
+          <tr>
+            <th>Symbolic Link</th>
+            <th>Device Object</th>
+          </tr>
+          <tr>
+            <td>\Device\Harddisk0\Partition2</td>
+            <td>\Device\HarddiskVolume1</td>
+          </tr>
+          <tr>
+            <td>\Device\Harddisk1\Partition1</td>
+            <td>\Device\HarddiskVolume2</td>
+          </tr>
+        </table>
+        <h1 class="logo__thin"> Easy to understand documentation by <span class="logo">noobes</span></h1>
+      </article>
+    </div>
+
+    <script>hljs.initHighlightingOnLoad();</script>
+    <script src="scribbler.js"></script>
+  </body>
+</html>
